@@ -4,19 +4,20 @@
 
 ## 项目概况
 
-- React 19 + Vite + TypeScript 前端应用，使用 Zustand 状态管理、Tailwind CSS 样式。
-- 源码在 `src/`，构建产物由 Vite 生成，不要手动编辑 `dist/`。
-- 包管理器为 npm（有 `package-lock.json`），不要使用 yarn 或 pnpm。
+- `frontend/` 是 React 19 + Vite + TypeScript 前端应用，使用 Zustand 状态管理、Tailwind CSS 样式。
+- `backend/` 预留给后端服务，后端技术栈确定后再补充对应约束。
+- 前端源码在 `frontend/src/`，构建产物由 Vite 生成，不要手动编辑 `frontend/dist/`。
+- 前端包管理器为 npm（有 `frontend/package-lock.json`），不要使用 yarn 或 pnpm。
 
 ## 常用命令
 
 | 操作 | 命令 |
 |------|------|
-| 安装依赖 | `npm install` |
-| 开发服务器 | `npm run dev` |
-| 构建 | `npm run build` |
-| 运行测试 | `npm test` |
-| 监听测试 | `npm run test:watch` |
+| 安装依赖 | `npm --prefix frontend install` |
+| 开发服务器 | `npm --prefix frontend run dev` |
+| 构建 | `npm --prefix frontend run build` |
+| 运行测试 | `npm --prefix frontend test` |
+| 监听测试 | `npm --prefix frontend run test:watch` |
 
 - 测试使用 Vitest，已有多个 `*.test.ts` 文件。
 - 不要新增 lint/formatter 配置文件，除非明确要求。
@@ -51,11 +52,11 @@
 ### TypeScript
 
 - 使用 ESM import，`const` 优先，永远不用 `var`。
-- Target `ES2020`（见 `tsconfig.json`）。
+- Target `ES2020`（见 `frontend/tsconfig.json`）。
 - 优先早返回，避免深层嵌套和 `else` 链。
 - 尽量避免 `any`；需要时保持局部化。
 - 利用类型推断，不写多余的类型注解。
-- 共享类型放 `src/types.ts`，局部类型放文件顶部。
+- 前端共享类型放 `frontend/src/types.ts`，局部类型放文件顶部。
 
 ### 命名
 
@@ -137,7 +138,7 @@ else params = baseParams
 ## React 组件
 
 - 函数组件 + hooks，不使用 class 组件。
-- 组件文件放 `src/components/`，hooks 放 `src/hooks/`，工具函数放 `src/lib/`。
+- 组件文件放 `frontend/src/components/`，hooks 放 `frontend/src/hooks/`，工具函数放 `frontend/src/lib/`。
 - 复杂 UI 逻辑可以拆成独立组件或 hook，不必强行内联。
 - Tailwind 类名不强制排序，但同类属性（布局、间距、颜色、交互）尽量分组书写，保持可读。
 
@@ -154,17 +155,17 @@ else params = baseParams
 
 ## 架构约束
 
-- 新增纯函数或工具逻辑时，放 `src/lib/` 而非 `src/store.ts`。store 文件已过大，应只包含 state 定义和 action 入口。
-- 避免在多处重复定义相同工具函数（如 `blobToDataUrl`），优先复用 `src/lib/` 中已有导出。
+- 新增前端纯函数或工具逻辑时，放 `frontend/src/lib/` 而非 `frontend/src/store.ts`。store 文件已过大，应只包含 state 定义和 action 入口。
+- 避免在多处重复定义相同工具函数（如 `blobToDataUrl`），优先复用 `frontend/src/lib/` 中已有导出。
 - 新增较大功能时，优先拆成独立模块（lib 函数 + hook + 组件），而非全部塞进现有大文件。
 - 组件超过 800 行时，考虑按逻辑边界拆成子组件或自定义 hook。
 
 ## 注意事项
 
-- `src/store.ts` 是核心状态文件（5000+ 行），修改时注意：
+- `frontend/src/store.ts` 是核心状态文件（5000+ 行），修改时注意：
   - 持久化逻辑和数据迁移（`persist` middleware + IndexedDB）。
   - 模块顶部的 `normalize*` 函数用于从 IndexedDB/localStorage 恢复时清洗旧格式数据，修改需保持向后兼容。
   - 新增 state 字段时，考虑是否需要持久化以及升级路径。
-- `src/lib/apiProfiles.ts` 包含多供应商配置，修改时注意向后兼容。
-- `src/lib/db.ts` 是 IndexedDB 封装层，修改 schema 时需升级 `DB_VERSION` 并处理 `onupgradeneeded`。
-- 修改完成后优先运行 `npm run build` 验证编译，再运行 `npm test` 验证测试。
+- `frontend/src/lib/apiProfiles.ts` 包含多供应商配置，修改时注意向后兼容。
+- `frontend/src/lib/db.ts` 是 IndexedDB 封装层，修改 schema 时需升级 `DB_VERSION` 并处理 `onupgradeneeded`。
+- 前端修改完成后优先在 `frontend/` 运行 `npm run build` 验证编译，再运行 `npm test` 验证测试。

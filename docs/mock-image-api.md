@@ -4,7 +4,10 @@
 
 ## 启动
 
+以下命令从仓库根目录执行：
+
 ```powershell
+cd frontend
 npm run mock:api
 ```
 
@@ -13,6 +16,7 @@ npm run mock:api
 如需修改端口：
 
 ```powershell
+cd frontend
 $env:MOCK_IMAGE_API_PORT="8788"; npm run mock:api
 ```
 
