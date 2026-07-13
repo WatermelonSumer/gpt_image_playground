@@ -23,6 +23,7 @@ export default defineConfig(({ command }) => {
   return {
     plugins: [react()],
     base: './',
+    envDir: '..',
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
       __DEV_PROXY_CONFIG__: JSON.stringify(devProxyConfig),

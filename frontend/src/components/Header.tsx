@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronDown, LogOut, UserRound } from 'lucide-react'
+import { useAuthStore } from '../authStore'
 import { useStore } from '../store'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -18,6 +20,8 @@ function isInstalledPwa() {
 }
 
 export default function Header() {
+  const auth = useAuthStore((state) => state.auth)
+  const logout = useAuthStore((state) => state.logout)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const filterFavorite = useStore((s) => s.filterFavorite)
@@ -25,8 +29,11 @@ export default function Header() {
   const favoriteCollectionTitle = useFavoriteCollectionTitle()
   const showFavoriteCollectionTitle = Boolean(activeFavoriteCollectionId)
   const [showHelp, setShowHelp] = useState(false)
+  const [showAccount, setShowAccount] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isPwaInstalled, setIsPwaInstalled] = useState(isInstalledPwa)
+  const accountRef = useRef<HTMLDivElement>(null)
+  const user = auth.status === 'authenticated' ? auth.user : null
 
   const installTooltip = useTooltip()
   const helpTooltip = useTooltip()
@@ -52,6 +59,23 @@ export default function Header() {
       window.removeEventListener('appinstalled', handleAppInstalled)
     }
   }, [])
+
+  useEffect(() => {
+    if (!showAccount) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!accountRef.current?.contains(event.target as Node)) setShowAccount(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowAccount(false)
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [showAccount])
 
   const handleInstallClick = async () => {
     if (installPrompt) {
@@ -153,6 +177,46 @@ export default function Header() {
                 设置
               </ViewportTooltip>
             </div>
+            {user && (
+              <div ref={accountRef} className="relative ml-1">
+                <button
+                  onClick={() => setShowAccount((value) => !value)}
+                  className="flex h-9 max-w-52 items-center gap-2 rounded-md border border-gray-200 bg-white px-2 text-sm transition-colors hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+                  aria-label="账户菜单"
+                  aria-expanded={showAccount}
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-blue-600 text-xs font-bold text-white">
+                    {user.email.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="hidden min-w-0 truncate text-gray-700 dark:text-gray-300 md:block">{user.email}</span>
+                  <ChevronDown className="hidden h-4 w-4 shrink-0 text-gray-400 md:block" aria-hidden="true" />
+                </button>
+
+                {showAccount && (
+                  <div className="absolute right-0 top-11 w-64 rounded-md border border-gray-200 bg-white p-1 shadow-lg dark:border-gray-800 dark:bg-gray-950">
+                    <div className="border-b border-gray-100 px-3 py-2.5 dark:border-gray-800">
+                      <div className="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
+                        <UserRound className="h-4 w-4 text-gray-400" aria-hidden="true" />
+                        <span className="min-w-0 truncate">{user.email}</span>
+                      </div>
+                      <div className="mt-1 pl-6 text-xs text-gray-500 dark:text-gray-400">
+                        {user.role === 'super_admin' ? '超级管理员' : '普通用户'}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setShowAccount(false)
+                        void logout()
+                      }}
+                      className="mt-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 dark:text-gray-300 dark:hover:bg-gray-900"
+                    >
+                      <LogOut className="h-4 w-4" aria-hidden="true" />
+                      退出登录
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </header>

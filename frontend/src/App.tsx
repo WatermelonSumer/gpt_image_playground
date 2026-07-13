@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useAuthStore } from './authStore'
 import { initStore } from './store'
 import { useStore } from './store'
 import { activateFirstImportedProfile, buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
@@ -19,10 +20,24 @@ import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import { FavoriteCollectionPickerModal, FavoriteCollectionsView, ManageCollectionsModal } from './components/FavoriteCollections'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
+import LoginPage, { AuthLoadingScreen } from './components/LoginPage'
 
 let customProviderConfigUrlImportStarted = false
 
 export default function App() {
+  const auth = useAuthStore((state) => state.auth)
+  const restoreSession = useAuthStore((state) => state.restoreSession)
+
+  useEffect(() => {
+    void restoreSession()
+  }, [restoreSession])
+
+  if (auth.status === 'checking') return <AuthLoadingScreen />
+  if (auth.status === 'anonymous') return <LoginPage />
+  return <Workspace />
+}
+
+function Workspace() {
   const setSettings = useStore((s) => s.setSettings)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)

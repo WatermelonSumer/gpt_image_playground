@@ -6,7 +6,7 @@
 
 ```text
 frontend/  React 19 + Vite + TypeScript 前端
-backend/   FastAPI + PostgreSQL 后端，当前待实现
+backend/   Python 3.14 + FastAPI + PostgreSQL 18 后端
 docs/      业务需求、平台设计和前端改造审计
 ```
 
@@ -26,6 +26,38 @@ docs/      业务需求、平台设计和前端改造审计
 
 ## 前端开发
 
+前后端统一读取根目录 `.env`。首次运行先创建本地配置：
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell 可以使用：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+启动 PostgreSQL 18 和 Redis 8：
+
+```bash
+docker compose up -d postgres redis
+```
+
+初始化后端：
+
+```bash
+cd backend
+uv python install 3.14
+uv sync
+uv run python -m app.cli init
+uv run uvicorn app.main:app --reload
+```
+
+`app.cli init` 会执行 Alembic 迁移，并使用根目录 `.env` 中的 `INITIAL_SUPER_ADMIN_EMAIL` 和 `INITIAL_SUPER_ADMIN_PASSWORD` 创建初始超级管理员。
+
+启动前端：
+
 ```bash
 cd frontend
 npm install
@@ -33,6 +65,7 @@ npm run dev
 ```
 
 默认开发地址由 Vite 输出，通常为 `http://localhost:5173`。
+Vite 通过 `envDir` 读取根目录 `.env` 中的 `VITE_BACKEND_URL`。
 
 ## 前端验证
 
@@ -44,6 +77,12 @@ npm test
 
 前端构建产物位于 `frontend/dist/`，不要手动修改。
 
-## 后端状态
+## 后端验证
 
-`backend/` 目前只保留目录位置。后续将在该目录实现 FastAPI 应用、PostgreSQL 数据模型、认证、支付、计费、渠道路由和管理员接口。
+```bash
+cd backend
+uv run pytest
+uv run alembic check
+```
+
+当前后端已包含用户、刷新会话、登录、刷新、退出和当前用户接口。刷新令牌通过 HttpOnly Cookie 保存，数据库只保存不可逆哈希。
