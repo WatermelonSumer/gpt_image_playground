@@ -606,6 +606,14 @@ describe('agent conversation persistence', () => {
     expect(JSON.stringify(useStore.getState().agentConversations)).toContain('large-base64-a')
   })
 
+  it('persists gallery mode after removing the Agent entry', () => {
+    useStore.setState({ appMode: 'agent' })
+
+    const persisted = getPersistedState(useStore.getState())
+
+    expect(persisted.appMode).toBe('gallery')
+  })
+
   it('loads agent conversations from IndexedDB and migrates legacy localStorage conversations', async () => {
     const storedConversation = agentConversation({ id: 'stored-conversation', createdAt: 1, updatedAt: 1 })
     const legacyConversation = agentConversation({ id: 'legacy-conversation', createdAt: 2, updatedAt: 2 })

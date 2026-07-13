@@ -1,7 +1,7 @@
 {
-  "name": "GPT Image Playground",
-  "short_name": "GPT Image",
-  "description": "GPT Image Playground 图像生成工作台",
+  "name": "像素引擎 PixelEngine",
+  "short_name": "像素引擎",
+  "description": "像素引擎图片生成与额度管理平台",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
