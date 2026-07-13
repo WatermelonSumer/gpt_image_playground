@@ -3,7 +3,6 @@ import type { TaskRecord } from '../types'
 import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
-import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { CodeIcon, TransparentBgIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
@@ -314,16 +313,14 @@ export default function TaskCard({
   const showTransparentOutput = task.transparentOutput || task.params.transparent_output
 
   const nDisplay = getParamDisplay(task, 'n')
-  const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
   const showPendingPrompt = isAgentTaskPromptPending(task)
-  const showN = !isAgentTask && (task.params.n > 1 || nDisplay.isMismatch)
+  const showN = task.params.n > 1 || nDisplay.isMismatch
   const outputErrorCount = task.outputErrors?.length ?? 0
   const outputSuccessCount = task.outputImages?.length ?? 0
   const requestedOutputCount = Math.max(task.params.n, outputSuccessCount + outputErrorCount)
   const hasPartialOutputFailure = task.status === 'done' && outputErrorCount > 0
 
-  const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
-  const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
+  const showModel = Boolean(task.apiModel)
   const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
 
   return (

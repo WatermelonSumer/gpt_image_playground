@@ -1,14 +1,12 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
-import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
-import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
 import SizePickerModal from './SizePickerModal'
@@ -397,7 +395,6 @@ export default function InputBar() {
   const setParams = useStore((s) => s.setParams)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
-  const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
@@ -410,8 +407,6 @@ export default function InputBar() {
   const clearFavoriteCollectionSelection = useStore((s) => s.clearFavoriteCollectionSelection)
   const tasks = useStore((s) => s.tasks)
   const favoriteCollections = useStore((s) => s.favoriteCollections)
-  const agentConversations = useStore((s) => s.agentConversations)
-  const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
@@ -690,45 +685,15 @@ export default function InputBar() {
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
 
-  const settingsActiveProfile = useMemo(() => getActiveApiProfile(settings), [settings])
-  const currentActiveProfile = useMemo(() => (
-    appMode === 'agent'
-      ? getAgentImageApiProfile(settings) ?? settingsActiveProfile
-      : settingsActiveProfile
-  ), [appMode, settings, settingsActiveProfile])
-  const activeProfile = useMemo(() => (
-    appMode !== 'agent' && settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId
-      ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
-      : currentActiveProfile
-  ), [appMode, currentActiveProfile, reusedTaskApiProfileId, settings])
-  const activeAgentConversation = appMode === 'agent'
-    ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
-    : null
-  const activeAgentIsRunning = Boolean(activeAgentConversation?.rounds.some((round) => round.status === 'running'))
-  const effectiveSettings = useMemo(() => (
-    activeProfile.id === settingsActiveProfile.id
-      ? settings
-      : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
-  ), [activeProfile.id, settingsActiveProfile.id, settings])
-  const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
-  const submitButtonAriaLabel = activeAgentIsRunning
-    ? '停止生成'
-    : hasSubmitApiConfig
-    ? maskDraft ? '遮罩编辑' : '生成图像'
-    : '请先配置 API'
-  const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 配置，请在右上角设置中进行'
+  const activeProfile = useMemo(() => ({ provider: 'openai' as const, streamImages: false, codexCli: false }), [])
+  const effectiveSettings = settings
+  const hasSubmitApiConfig = true
+  const canSubmit = Boolean(prompt.trim())
+  const submitButtonAriaLabel = maskDraft ? '遮罩编辑' : '生成图像'
   const promptPlaceholder = '描述你想生成的图片，可输入 @ 来指定参考图...'
   const submitCurrentMode = useCallback(() => {
-    if (appMode === 'agent') {
-      void submitAgentMessage()
-    } else {
-      void submitTask()
-    }
-  }, [appMode])
-  const stopActiveAgentResponse = useCallback(() => {
-    stopAgentResponse(activeAgentConversationId)
-  }, [activeAgentConversationId])
+    void submitTask()
+  }, [])
   const syncPromptFromContentEditable = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
@@ -792,23 +757,8 @@ export default function InputBar() {
     : inputImages
   const cursorPosition = cursorPos
   const visiblePrompt = stripImageMentionMarkers(prompt)
-  const agentOutputImageOptions = useMemo<AtImageOption[]>(() => {
-    if (!activeAgentConversation) return []
-    return getActiveAgentRounds(activeAgentConversation).flatMap((round) =>
-      collectAgentRoundOutputImageSlots(round, tasks).flatMap((imageId, imageIndex) => {
-        if (!imageId) return []
-        const label = `@第${round.index}轮图${imageIndex + 1}`
-        return {
-          type: 'agent-output' as const,
-          key: `agent-output:${round.id}:${imageIndex}:${imageId}`,
-          label,
-          imageId,
-          insertText: label,
-        }
-      }),
-    )
-  }, [activeAgentConversation, tasks])
-  const atImageSourceCount = inputImages.length + agentOutputImageOptions.length
+  const agentOutputImageOptions: AtImageOption[] = []
+  const atImageSourceCount = inputImages.length
   const atImageQuery = isCursorInSelectedImageMention(prompt, cursorPosition)
     ? null
     : getAtImageQuery(visiblePrompt, cursorPosition, { length: atImageSourceCount })
@@ -824,7 +774,6 @@ export default function InputBar() {
             imageIndex: index,
           } satisfies AtImageOption))
           .filter((option) => imageMentionMatches(atImageQuery.query, option.imageIndex)),
-        ...agentOutputImageOptions.filter((option) => agentImageMentionMatches(atImageQuery.query, option.label)),
       ]
     : []
   const showAtImageMenu = !atImageMenuDismissed && atImageOptions.length > 0
@@ -2126,28 +2075,15 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${
-                      activeAgentIsRunning
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                        : !hasSubmitApiConfig
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
-                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
-                    }`}
+                    onClick={() => submitCurrentMode()}
+                    disabled={!canSubmit}
+                    className="p-2.5 rounded-xl transition-all shadow-sm hover:shadow bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label={submitButtonAriaLabel}
                   >
-                    {activeAgentIsRunning ? (
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-                      </svg>
-                    ) : (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    )}
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
                   </button>
                 </div>
               </div>
@@ -2233,29 +2169,16 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
                   <button
-                    onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
-                    disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
+                    onClick={() => submitCurrentMode()}
+                    disabled={!canSubmit}
                     aria-label={submitButtonAriaLabel}
-                    className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
-                      activeAgentIsRunning
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                        : !hasSubmitApiConfig
-                        ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
-                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
-                    }`}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {activeAgentIsRunning ? (
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    )}
-                    {activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : '生成图像'}
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                    {maskDraft ? '遮罩编辑' : '生成图像'}
                   </button>
                 </div>
               </div>

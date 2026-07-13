@@ -1,6 +1,6 @@
 import type { TaskRecord } from '../types'
 
-export function isAgentTaskPromptPending(task: TaskRecord): boolean {
-  const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
-  return isAgentTask && task.status === 'running' && !task.prompt.trim()
+export function isAgentTaskPromptPending(_task: TaskRecord): boolean {
+  // Agent 模式已永久删除，此函数保留以兼容调用方，始终返回 false
+  return false
 }
