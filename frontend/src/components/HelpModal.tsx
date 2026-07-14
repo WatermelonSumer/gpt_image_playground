@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import type { AppMode } from '../types'
+// AppMode removed — use string
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 
 interface HelpModalProps {
-  appMode: AppMode
+  appMode: string
   isFavoriteCollectionOverview?: boolean
   onClose: () => void
 }

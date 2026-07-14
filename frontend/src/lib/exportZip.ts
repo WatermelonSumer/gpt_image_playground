@@ -1,26 +1,23 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 
-import type { AgentConversation, AppSettings, ExportData, FavoriteCollection, StoredImage, StoredImageThumbnail, TaskRecord } from '../types'
+import type { ExportData, FavoriteCollection, StoredImage, StoredImageThumbnail, TaskRecord } from '../types'
 import { bytesToDataUrl, dataUrlToBytes } from './dataUrl'
 import { getNumberedFileNameBase, sanitizeFileNamePart } from './exportFileName'
 
 type ZipFiles = Record<string, Uint8Array | [Uint8Array, { mtime: Date }]>
 
 export interface BuildExportZipOptions {
-  exportConfig?: boolean
   exportTasks?: boolean
 }
 
 export interface BuildExportZipParams {
   options: BuildExportZipOptions
   exportedAt: number
-  settings: AppSettings
   tasks: TaskRecord[]
   images: StoredImage[]
   thumbnailsByImageId: Map<string, StoredImageThumbnail>
   favoriteCollections: FavoriteCollection[]
   defaultFavoriteCollectionId: string | null
-  agentConversations: AgentConversation[]
 }
 
 export interface ExportZipContents {
@@ -74,12 +71,10 @@ export function buildExportZip(params: BuildExportZipParams) {
     exportedAt: exportedAtDate.toISOString(),
   }
 
-  if (params.options.exportConfig) manifest.settings = params.settings
   if (params.options.exportTasks) {
     manifest.tasks = params.tasks
     manifest.favoriteCollections = params.favoriteCollections
     manifest.defaultFavoriteCollectionId = params.defaultFavoriteCollectionId
-    manifest.agentConversations = params.agentConversations
     manifest.imageFiles = imageFiles
     manifest.thumbnailFiles = thumbnailFiles
   }

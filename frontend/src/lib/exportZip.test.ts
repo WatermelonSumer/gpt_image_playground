@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { AppSettings, StoredImage, StoredImageThumbnail, TaskParams, TaskRecord } from '../types'
+import type { StoredImage, StoredImageThumbnail, TaskParams, TaskRecord } from '../types'
 import { buildExportZip, readExportZip, readExportZipFileAsDataUrl } from './exportZip'
 
 describe('exportZip', () => {
@@ -40,15 +40,13 @@ describe('exportZip', () => {
     }
 
     const { manifest, bytes } = buildExportZip({
-      options: { exportConfig: true, exportTasks: true },
+      options: { exportTasks: true },
       exportedAt: 1700000001000,
-      settings: {} as AppSettings,
       tasks: [task],
       images,
       thumbnailsByImageId: new Map([[thumbnail.id, thumbnail]]),
       favoriteCollections: [],
       defaultFavoriteCollectionId: null,
-      agentConversations: [],
     })
     const parsed = readExportZip(bytes)
 

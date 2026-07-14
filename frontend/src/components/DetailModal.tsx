@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, retryTask } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -7,11 +7,10 @@ import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
-import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
-import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
+import { CloseIcon, CopyIcon, DownloadIcon, EditIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
 
@@ -24,7 +23,6 @@ export default function DetailModal() {
   const showToast = useStore((s) => s.showToast)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
   const settings = useStore((s) => s.settings)
-  const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
   const streamPreviewSrc = useStore((s) => detailTaskId ? s.streamPreviews[detailTaskId] || '' : '')
   const streamPreviewSlots = useStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
 
@@ -35,29 +33,15 @@ export default function DetailModal() {
   const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
   const [now, setNow] = useState(Date.now())
-  const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
-  const [showRawResponseModal, setShowRawResponseModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
-  const rawUrlsModalRef = useRef<HTMLDivElement>(null)
-  const rawResponseModalRef = useRef<HTMLDivElement>(null)
-
-  const rawUrlsBackdropPointerDownRef = useRef(false)
-  const rawResponseBackdropPointerDownRef = useRef(false)
 
   const copyErrorTooltip = useTooltip()
-  const copyRawUrlsTooltip = useTooltip()
-  const viewRawResponseTooltip = useTooltip()
   const downloadPartialImagesTooltip = useTooltip()
   const retryTooltip = useTooltip()
   const downloadImageTooltip = useTooltip()
   const downloadOriginalImageTooltip = useTooltip()
   const downloadAllTooltip = useTooltip()
-
-  const clearTextSelection = () => {
-    const selection = window.getSelection()
-    if (selection && !selection.isCollapsed) selection.removeAllRanges()
-  }
 
   const task = useMemo(
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
@@ -97,7 +81,7 @@ export default function DetailModal() {
   }, [imageIndex, streamPreviewItems.length, task, task?.status])
 
   useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
-  usePreventBackgroundScroll(Boolean(task), [modalRef, rawUrlsModalRef, rawResponseModalRef])
+  usePreventBackgroundScroll(Boolean(task), [modalRef])
 
   // Reset index when task changes
   useEffect(() => {
@@ -105,11 +89,11 @@ export default function DetailModal() {
   }, [detailTaskId])
 
   useEffect(() => {
-    if (task?.status !== 'running' && !(task?.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
+    if (task?.status !== 'running') return
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => window.clearInterval(id)
-  }, [task?.customRecoverable, task?.falRecoverable, task?.status])
+  }, [task?.status])
 
   // 加载所有相关图片
   useEffect(() => {
@@ -229,9 +213,9 @@ export default function DetailModal() {
 
   if (!task) return null
 
-  const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
+  const isAgentTask = false
   const showPendingPrompt = isAgentTaskPromptPending(task)
-  const isAgentEditTool = task.status === 'done' && String(task.agentToolAction ?? '').toLowerCase() === 'edit'
+  const isAgentEditTool = false
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
   const outputLen = outputSlots.length
@@ -251,18 +235,9 @@ export default function DetailModal() {
     : task.prompt
   const promptSentToApi = replaceImageMentionsForApi(requestPrompt, task.inputImageIds.length).trim()
   const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== promptSentToApi)
-  const codexCliPromptKey = getCodexCliPromptKey(settings)
-  const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
-  const taskProvider = task.apiProvider
-  const isOpenAiTask = (taskProvider ?? 'openai') === 'openai'
-  const showPromptWarning = Boolean(isOpenAiTask && task.apiMode === 'responses' && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
-  const taskProviderName = taskProvider === 'fal' ? 'fal.ai' : taskProvider ? 'OpenAI' : '未知'
-  const taskProfileName = task.apiProfileName || '未知'
   const taskModel = task.apiModel || '未知'
-  const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
-  const isFalReconnecting = task.status === 'error' && task.falRecoverable
-  const isCustomReconnecting = task.status === 'error' && task.customRecoverable
-  const rawImageUrls = task.rawImageUrls ?? []
+  const showSourceInfo = Boolean(task.apiModel)
+  const isFalReconnecting = false
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
   const streamPartialImageIds = task.streamPartialImageIds ?? []
@@ -277,7 +252,7 @@ export default function DetailModal() {
   }
 
   const formatDuration = () => {
-    if (task.status === 'running' || isFalReconnecting || isCustomReconnecting) {
+    if (task.status === 'running') {
       const seconds = Math.max(0, Math.floor((now - task.createdAt) / 1000))
       const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
       const ss = String(seconds % 60).padStart(2, '0')
@@ -331,13 +306,6 @@ export default function DetailModal() {
     } catch (err) {
       showToast(getClipboardFailureMessage('复制提示词失败', err), 'error')
     }
-  }
-
-  const handleShowPromptWarning = () => {
-    showCodexCliPrompt(
-      true,
-      currentRevisedPrompt ? '接口返回的提示词已被改写' : '接口没有返回官方 API 会返回的部分信息',
-    )
   }
 
   const handleCopyInputImage = async () => {
@@ -743,54 +711,6 @@ export default function DetailModal() {
                     复制完整报错
                   </ViewportTooltip>
                 </div>
-                {task.rawResponsePayload && (
-                  <div className="relative group">
-                    <button
-                      type="button"
-                      {...viewRawResponseTooltip.handlers}
-                      onClick={() => {
-                        dismissAllTooltips()
-                        setShowRawResponseModal(true)
-                      }}
-                      className="inline-flex items-center justify-center rounded-full border border-purple-200/80 bg-purple-50 px-3 py-1.5 text-purple-600 transition hover:bg-purple-100 dark:border-purple-500/20 dark:bg-purple-500/10 dark:text-purple-400 dark:hover:bg-purple-500/20"
-                      aria-label="查看原始响应"
-                    >
-                      <CodeIcon className="h-4 w-4" />
-                    </button>
-                    <ViewportTooltip visible={viewRawResponseTooltip.visible} className="whitespace-nowrap">
-                      查看原始响应
-                    </ViewportTooltip>
-                  </div>
-                )}
-                {task.rawImageUrls && task.rawImageUrls.length > 0 && (
-                  <div className="relative group">
-                    <button
-                      type="button"
-                      {...copyRawUrlsTooltip.handlers}
-                      onClick={async () => {
-                        if (task.rawImageUrls!.length === 1) {
-                          copyRawUrlsTooltip.handlers.onClick()
-                          try {
-                            await copyTextToClipboard(task.rawImageUrls![0])
-                            showToast('图片链接已复制', 'success')
-                          } catch (err) {
-                            showToast(getClipboardFailureMessage('复制链接失败', err), 'error')
-                          }
-                        } else {
-                          dismissAllTooltips()
-                          setShowRawUrlsModal(true)
-                        }
-                      }}
-                      className="inline-flex items-center justify-center rounded-full border border-green-200/80 bg-green-50 px-3 py-1.5 text-green-600 transition hover:bg-green-100 dark:border-green-500/20 dark:bg-green-500/10 dark:text-green-400 dark:hover:bg-green-500/20"
-                      aria-label="复制图片链接"
-                    >
-                      <LinkIcon className="h-4 w-4" />
-                    </button>
-                    <ViewportTooltip visible={copyRawUrlsTooltip.visible} className="whitespace-nowrap">
-                      复制图片链接
-                    </ViewportTooltip>
-                  </div>
-                )}
                 {streamPartialImageIds.length > 0 && (
                   <div className="relative group">
                     <button
@@ -857,20 +777,6 @@ export default function DetailModal() {
                 >
                   <CopyIcon className="h-4 w-4" />
                 </button>
-              )}
-              {showPromptWarning && (
-                <span className="relative inline-flex">
-                  <button
-                    type="button"
-                    className="p-1 rounded text-amber-500 hover:bg-amber-50 dark:text-yellow-300 dark:hover:bg-yellow-500/10 transition"
-                    onClick={handleShowPromptWarning}
-                    aria-label="提示词已被改写"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                    </svg>
-                  </button>
-                </span>
               )}
             </div>
             {showPendingPrompt ? (
@@ -961,11 +867,10 @@ export default function DetailModal() {
             </h3>
             {showSourceInfo && (
               <div className="mb-2 min-w-0 overflow-hidden rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
-                <span className="text-gray-400 dark:text-gray-500">来源</span>
+                <span className="text-gray-400 dark:text-gray-500">模型</span>
                 <br />
                 <div className="mt-0.5 overflow-x-auto hide-scrollbar whitespace-nowrap mask-edge-r pr-2">
-                  <span className="font-medium text-gray-700 dark:text-gray-200">{taskProviderName}</span>
-                  <span className="text-gray-400 dark:text-gray-500"> · {taskProfileName} · {taskModel}</span>
+                  <span className="font-medium text-gray-700 dark:text-gray-200">{taskModel}</span>
                 </div>
               </div>
             )}
@@ -1080,138 +985,6 @@ export default function DetailModal() {
           </div>
         </div>
       </div>
-
-      {showRawUrlsModal && rawImageUrls.length > 0 && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
-          onPointerDown={(e) => {
-            rawUrlsBackdropPointerDownRef.current = e.target === e.currentTarget
-          }}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (rawUrlsBackdropPointerDownRef.current && e.target === e.currentTarget) setShowRawUrlsModal(false)
-            rawUrlsBackdropPointerDownRef.current = false
-          }}
-        >
-          <div ref={rawUrlsModalRef} className="flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始图片链接 ({rawImageUrls.length})</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await copyTextToClipboard(rawImageUrls.join('\n'))
-                      showToast('复制成功', 'success')
-                    } catch (err) {
-                      showToast(getClipboardFailureMessage('复制失败', err), 'error')
-                    }
-                  }}
-                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors text-xs font-medium"
-                >
-                  <CopyIcon className="w-3.5 h-3.5" />
-                  全部复制
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowRawUrlsModal(false)}
-                  className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-white/[0.08] dark:hover:text-gray-300 transition-colors"
-                >
-                  <CloseIcon className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 bg-gray-50/50 dark:bg-black/20 overscroll-contain">
-              <div className="space-y-2.5">
-                {rawImageUrls.map((url, i) => (
-                  <div key={i} className="group flex items-center gap-3 p-3 sm:p-4 rounded-xl bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/[0.06] shadow-sm hover:shadow-md transition-all">
-                    <div className="flex-1 min-w-0 flex flex-col gap-1">
-                      <div className="text-xs font-medium text-gray-400 dark:text-gray-500">
-                        图片 {i + 1}
-                      </div>
-                      <div className="text-sm text-gray-700 dark:text-gray-300 truncate select-text" title={url}>
-                        {url}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await copyTextToClipboard(url)
-                          showToast('复制成功', 'success')
-                        } catch (err) {
-                          showToast(getClipboardFailureMessage('复制失败', err), 'error')
-                        }
-                      }}
-                      className="flex-shrink-0 p-2 sm:px-3 sm:py-1.5 flex items-center justify-center gap-1.5 rounded-lg bg-gray-50 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors text-xs font-medium border border-transparent dark:border-white/[0.04]"
-                      title="复制链接"
-                    >
-                      <CopyIcon className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
-                      <span className="hidden sm:inline">复制</span>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showRawResponseModal && task?.rawResponsePayload && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
-          onPointerDown={(e) => {
-            rawResponseBackdropPointerDownRef.current = e.target === e.currentTarget
-          }}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (rawResponseBackdropPointerDownRef.current && e.target === e.currentTarget) setShowRawResponseModal(false)
-            rawResponseBackdropPointerDownRef.current = false
-          }}
-        >
-          <div
-            ref={rawResponseModalRef}
-            className="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
-            onPointerDown={(e) => {
-              if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始响应数据</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await copyTextToClipboard(task.rawResponsePayload!)
-                      showToast('复制成功', 'success')
-                    } catch (err) {
-                      showToast(getClipboardFailureMessage('复制失败', err), 'error')
-                    }
-                  }}
-                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors text-xs font-medium"
-                >
-                  <CopyIcon className="w-3.5 h-3.5" />
-                  全部复制
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowRawResponseModal(false)}
-                  className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-white/[0.08] dark:hover:text-gray-300 transition-colors"
-                >
-                  <CloseIcon className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-5 bg-gray-50/50 dark:bg-black/20 overscroll-contain">
-              <pre data-selectable-text className="text-[11px] sm:text-xs text-gray-600 dark:text-gray-300 font-mono whitespace-pre-wrap break-all select-text">
-                {task.rawResponsePayload.replace(/"(b64_json|base64|data)":\s*"[^"]+"/g, '"$1": "<base64_data>"')}
-              </pre>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

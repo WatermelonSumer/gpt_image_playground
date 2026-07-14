@@ -1,6 +1,9 @@
 import { useEffect } from 'react'
+import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { useAuthStore } from './authStore'
 import { initStore, useStore } from './store'
+import { useModelsStore } from './modelsStore'
+import AdminPage from './components/admin/AdminPage'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
@@ -26,16 +29,13 @@ export default function App() {
 
   if (auth.status === 'checking') return <AuthLoadingScreen />
   if (auth.status === 'anonymous') return <LoginPage />
-  return <Workspace />
+  return <AuthedApp isSuperAdmin={auth.user.role === 'super_admin'} />
 }
 
-function Workspace() {
-  const filterFavorite = useStore((s) => s.filterFavorite)
-  const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
-  useGlobalClickSuppression()
-
+function AuthedApp({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   useEffect(() => {
     initStore()
+    void useModelsStore.getState().load()
   }, [])
 
   useEffect(() => {
@@ -48,6 +48,25 @@ function Workspace() {
     document.addEventListener('dragstart', preventPageImageDrag)
     return () => document.removeEventListener('dragstart', preventPageImageDrag)
   }, [])
+
+  return (
+    <HashRouter>
+      <Routes>
+        <Route path="/" element={<Workspace />} />
+        <Route
+          path="/admin"
+          element={isSuperAdmin ? <AdminPage /> : <Navigate to="/" replace />}
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </HashRouter>
+  )
+}
+
+function Workspace() {
+  const filterFavorite = useStore((s) => s.filterFavorite)
+  const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
+  useGlobalClickSuppression()
 
   return (
     <>

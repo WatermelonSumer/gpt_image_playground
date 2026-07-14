@@ -2,7 +2,9 @@ import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } fr
 import { createPortal } from 'react-dom'
 import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
-import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
+import { getChangedParams, normalizeParamsForSettings } from '../lib/paramCompatibility'
+import { useModelsStore } from '../modelsStore'
+import Select from './Select'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -396,6 +398,14 @@ export default function InputBar() {
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
   const setShowSettings = useStore((s) => s.setShowSettings)
+  const models = useModelsStore((s) => s.models)
+  const modelsStatus = useModelsStore((s) => s.status)
+  // 模型列表加载后，若未选择模型则默认选第一个
+  useEffect(() => {
+    if (!settings.model && models.length > 0) {
+      setSettings({ model: models[0].platform_model_id })
+    }
+  }, [models, settings.model, setSettings])
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -704,14 +714,17 @@ export default function InputBar() {
     setPrompt(getContentEditablePlainText(el))
   }, [setPrompt])
   const activeProvider = activeProfile.provider
-  const isFalProvider = activeProvider === 'fal'
-  const agentAutoImageCount = appMode === 'agent'
+  const isFalProvider = false
+  const agentAutoImageCount = false
   const moderationDisabled = isFalProvider
   const transparentOutputAvailable = appMode === 'gallery'
   const showTransparentOutputControl = transparentOutputAvailable && params.output_format === 'png'
   const transparentOutputEnabled = transparentOutputAvailable && showTransparentOutputControl && params.transparent_output
   const compressionDisabled = params.output_format === 'png' || isFalProvider
-  const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
+  const selectedModel = models.find((m) => m.platform_model_id === settings.model)
+  const outputImageLimit = selectedModel && selectedModel.supports_n ? selectedModel.max_n : selectedModel ? 1 : 10
+  const modelOptions = models.map((m) => ({ label: m.display_name, value: m.platform_model_id }))
+  const modelSelectPlaceholder = modelsStatus === 'loading' ? '加载模型中…' : modelsStatus === 'error' ? '模型加载失败' : '暂无可用模型'
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nDraftValue = Number(nInput)
   const effectiveNValue = Number.isNaN(nDraftValue) ? params.n : nDraftValue
@@ -721,9 +734,7 @@ export default function InputBar() {
     : isFalProvider
     ? `fal.ai 最大请求数量为 ${outputImageLimit}`
     : `OpenAI 最大请求数量为 ${outputImageLimit}`
-  const displaySize = isFalTextToImage && params.size === 'auto'
-    ? DEFAULT_FAL_IMAGE_SIZE
-    : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
+  const displaySize = normalizeImageSize(params.size) || DEFAULT_PARAMS.size
 
   const qualityOptions = isFalProvider
     ? [
@@ -863,7 +874,7 @@ export default function InputBar() {
   }, [agentAutoImageCount, params.n])
 
   useEffect(() => {
-    const normalizedParams = normalizeParamsForSettings(params, effectiveSettings, { hasInputImages: inputImages.length > 0 })
+    const normalizedParams = normalizeParamsForSettings(params, effectiveSettings)
     const patch = getChangedParams(params, normalizedParams)
     if (Object.keys(patch).length) {
       setParams(patch)
@@ -1837,9 +1848,6 @@ export default function InputBar() {
       cols={cols}
       params={params}
       setParams={setParams}
-      activeProfile={activeProfile}
-      isFalProvider={isFalProvider}
-      isFalTextToImage={isFalTextToImage}
       displaySize={displaySize}
       qualityOptions={qualityOptions}
       selectClass={selectClass}
@@ -1855,21 +1863,14 @@ export default function InputBar() {
       commitOutputCompression={commitOutputCompression}
       moderationHint={moderationHint}
       moderationDisabled={moderationDisabled}
-      agentAutoImageCount={agentAutoImageCount}
       outputImageLimit={outputImageLimit}
       nInput={nInput}
       setNInputFocused={setNInputFocused}
       commitN={commitN}
       handleNInputChange={handleNInputChange}
       handleNLimitIncreaseAttempt={handleNLimitIncreaseAttempt}
-      showAgentNHint={showAgentNHint}
-      hideNLimitHint={hideNLimitHint}
-      startAgentNHintTouch={startAgentNHintTouch}
-      clearAgentNHintTouchTimer={clearAgentNHintTouchTimer}
       nLimitHint={nLimitHint}
       nLimitHintText={nLimitHintText}
-      streamConcurrentByN={streamConcurrentByN}
-      streamConcurrentHint={streamConcurrentHint}
       sizeHint={sizeHint}
       qualityHint={qualityHint}
       onOpenSizePicker={() => setShowSizePicker(true)}
@@ -1885,10 +1886,10 @@ export default function InputBar() {
 
       {showSizePicker && (
         <SizePickerModal
-          currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
+          currentSize={params.size}
           onSelect={(size) => setParams({ size })}
           onClose={() => setShowSizePicker(false)}
-          allowAuto={!isFalTextToImage}
+          allowAuto={true}
         />
       )}
 
@@ -1969,7 +1970,6 @@ export default function InputBar() {
                     >
                       <AtImageOptionThumb option={option} />
                       <span className="min-w-0 flex-1 truncate font-medium">{option.label}</span>
-                      {option.type === 'agent-output' && <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">历史</span>}
                     </button>
                   ))}
                 </div>
@@ -2041,6 +2041,28 @@ export default function InputBar() {
                 <CloseIcon className="w-3.5 h-3.5" />
               </button>
             )}
+          </div>
+
+          {/* 模型选择 */}
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">模型</span>
+            <div className="flex-1 min-w-0">
+              {modelOptions.length > 0 ? (
+                <Select
+                  value={settings.model}
+                  onChange={(val) => setSettings({ model: String(val) })}
+                  options={modelOptions}
+                  className={selectClass}
+                />
+              ) : (
+                <div className={`${selectClass} opacity-50 cursor-not-allowed`}>{modelSelectPlaceholder}</div>
+              )}
+            </div>
+            {selectedModel ? (
+              <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0 font-mono">
+                {(selectedModel.unit_price / 100).toFixed(2)} 额度/张
+              </span>
+            ) : null}
           </div>
 
           {/* 参数 + 按钮 */}

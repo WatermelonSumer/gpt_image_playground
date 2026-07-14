@@ -51,8 +51,10 @@ cd backend
 uv python install 3.14
 uv sync
 uv run python -m app.cli init
-uv run uvicorn app.main:app --reload
+uv run python -m app.cli serve --reload
 ```
+
+`app.cli serve` 会在 Windows 上使用 psycopg 异步所需的 SelectorEventLoop，避免直接调用 `uvicorn` 时默认 ProactorEventLoop 导致的数据库连接错误。
 
 `app.cli init` 会执行 Alembic 迁移，并使用根目录 `.env` 中的 `INITIAL_SUPER_ADMIN_EMAIL` 和 `INITIAL_SUPER_ADMIN_PASSWORD` 创建初始超级管理员。
 

@@ -1,4 +1,4 @@
-import type { ApiProfile, TaskParams } from '../../types'
+import type { TaskParams } from '../../types'
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import Select from '../Select'
 import ButtonTooltip from './buttonTooltip'
@@ -15,9 +15,6 @@ export default function InputParamsPanel({
   cols,
   params,
   setParams,
-  activeProfile,
-  isFalProvider,
-  isFalTextToImage,
   displaySize,
   qualityOptions,
   selectClass,
@@ -33,21 +30,14 @@ export default function InputParamsPanel({
   commitOutputCompression,
   moderationHint,
   moderationDisabled,
-  agentAutoImageCount,
   outputImageLimit,
   nInput,
   setNInputFocused,
   commitN,
   handleNInputChange,
   handleNLimitIncreaseAttempt,
-  showAgentNHint,
-  hideNLimitHint,
-  startAgentNHintTouch,
-  clearAgentNHintTouchTimer,
   nLimitHint,
   nLimitHintText,
-  streamConcurrentByN,
-  streamConcurrentHint,
   sizeHint,
   qualityHint,
   onOpenSizePicker,
@@ -55,9 +45,6 @@ export default function InputParamsPanel({
   cols: string
   params: TaskParams
   setParams: (patch: Partial<TaskParams>) => void
-  activeProfile: ApiProfile
-  isFalProvider: boolean
-  isFalTextToImage: boolean
   displaySize: string
   qualityOptions: Array<{ label: string; value: string }>
   selectClass: string
@@ -73,21 +60,14 @@ export default function InputParamsPanel({
   commitOutputCompression: () => void
   moderationHint: HintTooltipState
   moderationDisabled: boolean
-  agentAutoImageCount: boolean
   outputImageLimit: number
   nInput: string
   setNInputFocused: (focused: boolean) => void
   commitN: () => void
   handleNInputChange: (value: string) => void
   handleNLimitIncreaseAttempt: (preventDefault: () => void) => void
-  showAgentNHint: () => void
-  hideNLimitHint: () => void
-  startAgentNHintTouch: () => void
-  clearAgentNHintTouchTimer: () => void
   nLimitHint: HintTooltipState
   nLimitHintText: string
-  streamConcurrentByN: boolean
-  streamConcurrentHint: HintTooltipState
   sizeHint: HintTooltipState
   qualityHint: HintTooltipState
   onOpenSizePicker: () => void
@@ -112,10 +92,6 @@ export default function InputParamsPanel({
         >
           {displaySize}
         </button>
-        <ButtonTooltip
-          visible={isFalTextToImage && sizeHint.visible}
-          text={<>fal.ai 的文生图模式不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 参数</>}
-        />
       </label>
       <label
         className="relative flex flex-col gap-0.5"
@@ -128,19 +104,10 @@ export default function InputParamsPanel({
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
         <Select
-          value={activeProfile.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
-          onChange={(val) => {
-            if (!activeProfile.codexCli) setParams({ quality: val as TaskParams['quality'] })
-          }}
+          value={params.quality}
+          onChange={(val) => setParams({ quality: val as TaskParams['quality'] })}
           options={qualityOptions}
-          disabled={activeProfile.codexCli}
-          className={activeProfile.codexCli
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
-        />
-        <ButtonTooltip
-          visible={(activeProfile.codexCli || isFalProvider) && qualityHint.visible}
-          text={isFalProvider ? <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</> : 'Codex CLI 不支持质量参数'}
+          className={selectClass}
         />
       </label>
       <label className="flex flex-col gap-0.5">
@@ -218,7 +185,7 @@ export default function InputParamsPanel({
           />
           <ButtonTooltip
             visible={compressionHint.visible}
-            text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPEG 和 WebP 支持压缩率'}
+            text="仅 JPEG 和 WebP 支持压缩率"
           />
         </label>
       )}
@@ -248,21 +215,17 @@ export default function InputParamsPanel({
         />
         <ButtonTooltip
           visible={moderationDisabled && moderationHint.visible}
-          text="fal.ai 不支持审核参数"
+          text="当前配置不支持审核参数"
         />
       </label>
       <label
         className="relative flex flex-col gap-0.5"
-        onMouseEnter={() => { showAgentNHint(); streamConcurrentHint.show() }}
-        onMouseLeave={() => { hideNLimitHint(); streamConcurrentHint.hide() }}
-        onTouchStart={() => { startAgentNHintTouch(); streamConcurrentHint.startTouch() }}
-        onTouchEnd={() => { clearAgentNHintTouchTimer(); streamConcurrentHint.clearTimer() }}
-        onTouchCancel={() => {
-          clearAgentNHintTouchTimer()
-          hideNLimitHint()
-          streamConcurrentHint.hide()
-        }}
-        onClick={() => { showAgentNHint(); streamConcurrentHint.show() }}
+        onMouseEnter={nLimitHint.show}
+        onMouseLeave={nLimitHint.hide}
+        onTouchStart={nLimitHint.startTouch}
+        onTouchEnd={nLimitHint.clearTimer}
+        onTouchCancel={nLimitHint.hide}
+        onClick={nLimitHint.show}
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">数量</span>
         <input
@@ -283,18 +246,12 @@ export default function InputParamsPanel({
               handleNLimitIncreaseAttempt(() => e.preventDefault())
             }
           }}
-          disabled={agentAutoImageCount}
-          type={agentAutoImageCount ? 'text' : 'number'}
-          min={agentAutoImageCount ? undefined : 1}
-          max={agentAutoImageCount ? undefined : outputImageLimit}
-          className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
-            agentAutoImageCount
-              ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-              : 'bg-white/50 dark:bg-white/[0.03]'
-          }`}
+          type="number"
+          min={1}
+          max={outputImageLimit}
+          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm bg-white/50 dark:bg-white/[0.03]"
         />
         <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
-        <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
       </label>
     </div>
   )

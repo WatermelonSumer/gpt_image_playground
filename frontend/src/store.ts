@@ -8,7 +8,7 @@ import type {
   TaskRecord,
   FavoriteCollection,
 } from './types'
-import { DEFAULT_PARAMS, normalizeSettings } from './types'
+import { DEFAULT_PARAMS, DEFAULT_SETTINGS, normalizeSettings } from './types'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -35,6 +35,8 @@ import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
+import { createGeneration, getGeneration, type GenerationResponse } from './lib/generationApi'
+import { ApiError } from './lib/apiClient'
 import { formatExportFileTime } from './lib/exportFileName'
 import { buildExportZip, readExportZip, readExportZipFileAsDataUrl } from './lib/exportZip'
 
@@ -54,12 +56,7 @@ let thumbnailBackfillScheduled = false
 const MAX_IMAGE_CACHE_ENTRIES = 8
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
-const FAL_RECOVERY_POLL_MS = 10_000
-const CUSTOM_RECOVERY_POLL_MS = 10_000
-const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const OPENAI_INTERRUPTED_ERROR = '请求中断'
+const TASK_INTERRUPTED_ERROR = '请求中断'
 const ERROR_TOAST_MAX_LENGTH = 80
 type ToastType = 'info' | 'success' | 'error'
 type InputDraft = {
@@ -94,28 +91,6 @@ function isErrorToastTitle(title: string): boolean {
 }
 
 export type SettingsTab = 'general' | 'data' | 'about'
-
-type TimeoutStreamingHintProfile = {
-  provider?: string
-  streamImages?: boolean
-  streamPartialImages?: number
-}
-
-const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
-const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
-const TIMEOUT_PARTIAL_IMAGES_LOW_HINT = '也可尝试提高「请求中间步骤图像数」来维持连接，避免长时间无数据传输导致断开。'
-
-function getTimeoutStreamingHint(profile?: TimeoutStreamingHintProfile | null) {
-  if (profile?.provider !== 'openai') return ''
-  const partialImages = profile.streamPartialImages ?? 0
-  if (profile.streamImages !== true) return TIMEOUT_STREAMING_HINT
-  if (partialImages === 0) return TIMEOUT_PARTIAL_IMAGES_ZERO_HINT
-  return partialImages < 3 ? TIMEOUT_PARTIAL_IMAGES_LOW_HINT : ''
-}
-
-function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStreamingHintProfile | null) {
-  return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。${getTimeoutStreamingHint(profile)}`
-}
 
 export function getCachedImage(id: string): string | undefined {
   const dataUrl = imageCache.get(id)
@@ -404,7 +379,6 @@ export function getPersistedState(state: AppState) {
           inputImages: galleryInputDraft?.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) ?? [],
         }
       : {}),
-    dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
     appMode: 'gallery',
     galleryInputDraft: settings.persistInputOnRestart && galleryInputDraft
       ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) }
@@ -458,8 +432,6 @@ interface AppState {
   // 设置
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
-  dismissedCodexCliPrompts: string[]
-  dismissCodexCliPrompt: (key: string) => void
 
   // 输入
   prompt: string
@@ -710,12 +682,6 @@ export const useStore = create<AppState>()(
         const settings = normalizeSettings({ ...st.settings, ...s })
         return { settings }
       }),
-      dismissedCodexCliPrompts: [],
-      dismissCodexCliPrompt: (key) => set((st) => ({
-        dismissedCodexCliPrompts: st.dismissedCodexCliPrompts.includes(key)
-          ? st.dismissedCodexCliPrompts
-          : [...st.dismissedCodexCliPrompts, key],
-      })),
 
       // Input
       prompt: '',
@@ -969,24 +935,16 @@ function putTask(task: TaskRecord): Promise<IDBValidKey> {
   return dbPutTask(task)
 }
 
-function isOpenAITask(task: TaskRecord) {
-  return (task.apiProvider ?? 'openai') !== 'fal'
-}
-
-function isRunningOpenAITask(task: TaskRecord) {
-  return task.status === 'running' && isOpenAITask(task)
-}
-
-export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
+/** 应用重启后，把仍处于 running 的任务标记为已中断（平台任务状态改由后端轮询驱动） */
+export function markInterruptedRunningTasks(tasks: TaskRecord[], now = Date.now()) {
   const interruptedTasks: TaskRecord[] = []
   const updatedTasks = tasks.map((task) => {
-    if (!isRunningOpenAITask(task) || task.customTaskId) return task
+    if (task.status !== 'running') return task
 
     const updated: TaskRecord = {
       ...task,
       status: 'error',
-      error: OPENAI_INTERRUPTED_ERROR,
-      falRecoverable: false,
+      error: TASK_INTERRUPTED_ERROR,
       finishedAt: now,
       elapsed: Math.max(0, now - task.createdAt),
     }
@@ -995,41 +953,6 @@ export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Dat
   })
 
   return { tasks: updatedTasks, interruptedTasks }
-}
-
-function clearOpenAIWatchdogTimer(taskId: string) {
-  const timer = openAIWatchdogTimers.get(taskId)
-  if (timer) clearTimeout(timer)
-  openAIWatchdogTimers.delete(taskId)
-}
-
-function failOpenAITaskIfStillRunning(taskId: string, error: string, now = Date.now()) {
-  const task = useStore.getState().tasks.find((item) => item.id === taskId)
-  if (!task || !isRunningOpenAITask(task)) return false
-
-  updateTaskInStore(taskId, {
-    status: 'error',
-    error,
-    falRecoverable: false,
-    finishedAt: now,
-    elapsed: Math.max(0, now - task.createdAt),
-  })
-  return true
-}
-
-function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number, profile?: TimeoutStreamingHintProfile | null) {
-  clearOpenAIWatchdogTimer(taskId)
-  const task = useStore.getState().tasks.find((item) => item.id === taskId)
-  if (!task || !isRunningOpenAITask(task)) return
-
-  const timeoutMs = Math.max(0, timeoutSeconds * 1000)
-  const remainingMs = Math.max(0, timeoutMs - (Date.now() - task.createdAt))
-  const timer = setTimeout(() => {
-    openAIWatchdogTimers.delete(taskId)
-    const failed = failOpenAITaskIfStillRunning(taskId, createOpenAITimeoutError(timeoutSeconds, profile))
-    if (failed) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
-  }, remainingMs)
-  openAIWatchdogTimers.set(taskId, timer)
 }
 
 export function taskHasOutputErrors(task: Pick<TaskRecord, 'outputErrors'>) {
@@ -1049,89 +972,6 @@ export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
   const paramStr = JSON.stringify(task.params).toLowerCase()
   const errorStr = [task.error, ...(task.outputErrors ?? []).map((item) => item.error)].filter(Boolean).join('\n').toLowerCase()
   return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q)
-}
-
-function isNetworkRecoverableError(err: unknown) {
-  if (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') return true
-  const message = err instanceof Error ? err.message : String(err)
-  return /abort|network|failed to fetch|fetch failed|load failed|timeout|连接|断开|中断/i.test(message)
-}
-
-function isApiRequestNetworkError(err: unknown): boolean {
-  if (err instanceof TypeError) {
-    const message = err.message.toLowerCase()
-    return /failed to fetch|fetch failed|load failed|networkerror|network request failed/i.test(message)
-  }
-  return false
-}
-
-function getApiRequestNetworkErrorHint(
-  err: unknown,
-  createdAt: number,
-  usesApiProxy: boolean,
-  profile?: TimeoutStreamingHintProfile | null,
-): string | null {
-  if (!isApiRequestNetworkError(err)) return null
-
-  const elapsedSeconds = Math.max(0, (Date.now() - createdAt) / 1000)
-
-  if (elapsedSeconds <= 15) {
-    if (usesApiProxy) {
-      return '提示：请求立即失败，请检查 API 代理服务是否正常运行。'
-    }
-    return `提示：请求立即失败，可能原因：\n· API 服务器不可达或地址有误，请检查 API URL 是否正确、服务是否正常运行\n· 接口不支持浏览器跨域请求，可使用 Docker 部署版或本地运行版并配置 API 代理解决`
-  }
-
-  if (elapsedSeconds >= 55 && elapsedSeconds <= 75) {
-    return `提示：请求等待约 60 秒后被断开，这通常是 Nginx 等反向代理的默认超时，而非接口本身报错。可调大代理的超时时间（如 proxy_read_timeout），或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
-  }
-
-  if (elapsedSeconds >= 110 && elapsedSeconds <= 140) {
-    return `提示：请求等待约 120 秒后被断开，这通常是 Cloudflare 等 CDN/网关的超时限制，而非接口本身报错。如果使用 Cloudflare，可考虑升级套餐或使用不经过 CDN 的直连地址。${getTimeoutStreamingHint(profile)}`
-  }
-
-  return `提示：请求等待较长时间后被断开，通常是反向代理或网关的超时限制，而非接口本身报错。可检查代理超时设置，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
-}
-
-function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> {
-  if (!(err instanceof Error)) return {}
-
-  const rawImageUrls = 'rawImageUrls' in err ? (err as { rawImageUrls?: unknown }).rawImageUrls : undefined
-  const rawResponsePayload = 'rawResponsePayload' in err ? (err as { rawResponsePayload?: unknown }).rawResponsePayload : undefined
-  return {
-    rawImageUrls: Array.isArray(rawImageUrls) && rawImageUrls.length ? rawImageUrls.filter((url): url is string => typeof url === 'string') : undefined,
-    rawResponsePayload: typeof rawResponsePayload === 'string' ? rawResponsePayload : undefined,
-  }
-}
-
-function clearFalRecoveryTimer(taskId: string) {
-  const timer = falRecoveryTimers.get(taskId)
-  if (timer) clearTimeout(timer)
-  falRecoveryTimers.delete(taskId)
-}
-
-function scheduleFalRecovery(taskId: string, delayMs = FAL_RECOVERY_POLL_MS) {
-  if (falRecoveryTimers.has(taskId)) return
-  const timer = setTimeout(() => {
-    falRecoveryTimers.delete(taskId)
-    recoverFalTask(taskId)
-  }, delayMs)
-  falRecoveryTimers.set(taskId, timer)
-}
-
-function clearCustomRecoveryTimer(taskId: string) {
-  const timer = customRecoveryTimers.get(taskId)
-  if (timer) clearTimeout(timer)
-  customRecoveryTimers.delete(taskId)
-}
-
-function scheduleCustomRecovery(taskId: string, delayMs = CUSTOM_RECOVERY_POLL_MS) {
-  if (customRecoveryTimers.has(taskId)) return
-  const timer = setTimeout(() => {
-    customRecoveryTimers.delete(taskId)
-    recoverCustomTask(taskId)
-  }, delayMs)
-  customRecoveryTimers.set(taskId, timer)
 }
 
 function hasActualParams(params: Partial<TaskParams> | undefined): params is Partial<TaskParams> {
@@ -1221,47 +1061,10 @@ async function resolveImageSizeParamsList(
   })
 }
 
-async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<ReturnType<typeof getFalQueuedImageResult>>) {
-  const latest = useStore.getState().tasks.find((item) => item.id === task.id)
-  if (!latest || latest.status === 'done') return
-  if (latest.status !== 'running' && !latest.falRecoverable) return
-
-  const { outputIds, outputDataUrls, outputImageSizes, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
-  const actualParamsList = await resolveImageSizeParamsList(outputDataUrls, result.actualParamsList, outputImageSizes)
-  const latestBeforeUpdate = useStore.getState().tasks.find((item) => item.id === task.id)
-  if (!latestBeforeUpdate || latestBeforeUpdate.status === 'done' || (latestBeforeUpdate.status !== 'running' && !latestBeforeUpdate.falRecoverable)) {
-    await deleteUnreferencedImageIds([...outputIds, ...(transparentOriginalImageIds ?? [])])
-    return
-  }
-
-  updateTaskInStore(task.id, {
-    outputImages: outputIds,
-    transparentOriginalImages: transparentOriginalImageIds,
-    actualParams: firstActualParams(actualParamsList),
-    actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),
-    revisedPromptByImage: undefined,
-    status: 'done',
-    error: null,
-    falRecoverable: false,
-    finishedAt: Date.now(),
-    elapsed: Date.now() - task.createdAt,
-  })
-  useStore.getState().showToast(`fal.ai 任务已恢复，共 ${outputIds.length} 张图片`, 'success')
-  showTaskCompletionNotification('图像生成完成', `fal.ai 任务已恢复，共 ${outputIds.length} 张图片。`)
-}
-
-async function recoverFalTask(taskId: string) {
-  const { tasks } = useStore.getState()
-  const task = tasks.find((item) => item.id === taskId)
-  if (!task || task.apiProvider !== 'fal' || !task.falRequestId || !task.falEndpoint || task.status === 'done') return
-
-  scheduleFalRecovery(taskId)
-}
-
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore() {
   const storedTasks = await getAllTasks()
-  const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
+  const { tasks: markedTasks, interruptedTasks } = markInterruptedRunningTasks(storedTasks)
   const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
   const favoriteState = useStore.getState()
   const normalizedFavorites = normalizeLoadedFavoriteState(markedTasks.map(getPersistableTask), favoriteState.favoriteCollections, favoriteState.defaultFavoriteCollectionId)
@@ -1273,25 +1076,9 @@ export async function initStore() {
     useStore.getState().setDefaultFavoriteCollectionId(normalizedFavorites.defaultFavoriteCollectionId)
   }
   await Promise.all(tasks
-    .filter((task, index) => normalizedFavorites.changed || interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
+    .filter((task, index) => normalizedFavorites.changed || interruptedTaskIds.has(task.id) || tasks[index] !== markedTasks[index])
     .map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
-  for (const task of tasks) {
-    if (
-      task.apiProvider === 'fal' &&
-      task.falRequestId &&
-      task.falEndpoint &&
-      (task.status === 'running' || task.falRecoverable)
-    ) {
-      scheduleFalRecovery(task.id, 0)
-    }
-    if (
-      task.customTaskId &&
-      (task.status === 'running' || task.customRecoverable)
-    ) {
-      scheduleCustomRecovery(task.id, 0)
-    }
-  }
 
   // 收集所有任务引用的图片 id
   const referencedIds = new Set<string>()
@@ -1385,6 +1172,11 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
     return
   }
 
+  if (!normalizedSettings.model) {
+    showToast('请先选择平台模型', 'error')
+    return
+  }
+
   let orderedInputImages = inputImages
   let maskImageId: string | null = null
   let maskTargetImageId: string | null = null
@@ -1422,7 +1214,7 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
     await storeImage(img.dataUrl)
   }
 
-  const normalizedParams = normalizeParamsForSettings(params, normalizedSettings, { hasInputImages: orderedInputImages.length > 0 })
+  const normalizedParams = normalizeParamsForSettings(params, normalizedSettings)
   const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
@@ -1440,6 +1232,7 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
     id: taskId,
     prompt: prompt.trim(),
     params: taskParams,
+    apiModel: normalizedSettings.model || undefined,
     inputImageIds: orderedInputImages.map((i) => i.id),
     maskTargetImageId,
     maskImageId,
@@ -1573,11 +1366,153 @@ async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
 
 
 
+const GENERATION_POLL_MS = 2000
+const GENERATION_POLL_TIMEOUT_MS = 5 * 60 * 1000
+
+/** 去掉 data URL 前缀，返回纯 base64 */
+function dataUrlToBase64(dataUrl: string): string {
+  return dataUrl.replace(/^data:[^;]+;base64,/, '')
+}
+
+function base64ToDataUrl(b64: string, format: string): string {
+  const mime = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png'
+  return `data:${mime};base64,${b64}`
+}
+
+function failTask(taskId: string, createdAt: number, error: string) {
+  updateTaskInStore(taskId, {
+    status: 'error',
+    error,
+    finishedAt: Date.now(),
+    elapsed: Math.max(0, Date.now() - createdAt),
+  })
+}
+
+async function pollGeneration(generationId: string): Promise<GenerationResponse> {
+  const deadline = Date.now() + GENERATION_POLL_TIMEOUT_MS
+  for (;;) {
+    const result = await getGeneration(generationId)
+    if (result.status === 'done' || result.status === 'error') return result
+    if (Date.now() > deadline) {
+      return { ...result, status: 'error', error_message: '生成超时，请稍后在历史中查看结果' }
+    }
+    await new Promise((resolve) => setTimeout(resolve, GENERATION_POLL_MS))
+  }
+}
+
 async function executeTask(taskId: string) {
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
 
-  // TODO: call platform backend API for image generation
+  const platformModelId = task.apiModel
+  if (!platformModelId) {
+    failTask(taskId, task.createdAt, '未选择平台模型')
+    return
+  }
+
+  // 收集编辑模式的输入图片与遮罩（转为纯 base64）
+  const inputImages: string[] = []
+  for (const id of task.inputImageIds) {
+    const dataUrl = await ensureImageCached(id)
+    if (dataUrl) inputImages.push(dataUrlToBase64(dataUrl))
+  }
+  let maskImage: string | null = null
+  if (task.maskImageId) {
+    const maskDataUrl = await ensureImageCached(task.maskImageId)
+    if (maskDataUrl) maskImage = dataUrlToBase64(maskDataUrl)
+  }
+
+  let created: GenerationResponse
+  try {
+    created = await createGeneration({
+      platformModelId,
+      prompt: task.prompt,
+      params: task.params,
+      inputImages,
+      maskImage,
+    })
+  } catch (err) {
+    const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : '提交生成请求失败'
+    failTask(taskId, task.createdAt, message)
+    return
+  }
+
+  updateTaskInStore(taskId, {
+    generationRequestId: created.id,
+    unitPrice: created.unit_price,
+    chargedCredits: created.charged_credits,
+    platformModelName: created.display_name,
+  })
+
+  let result: GenerationResponse
+  try {
+    result = await pollGeneration(created.id)
+  } catch (err) {
+    const message = err instanceof ApiError ? err.message : '获取生成结果失败'
+    failTask(taskId, task.createdAt, message)
+    return
+  }
+
+  if (result.status === 'error' || !result.result_images?.length) {
+    failTask(taskId, task.createdAt, result.error_message ?? '生成失败')
+    return
+  }
+
+  // 结果 b64 → data URL → 存入 IndexedDB
+  const format = task.params.output_format || 'png'
+  const dataUrls = result.result_images.map((img) => base64ToDataUrl(img.b64_json, format))
+  const revisedPrompts = result.result_images.map((img) => img.revised_prompt ?? null)
+
+  try {
+    const { outputIds, outputDataUrls, outputImageSizes, transparentOriginalImageIds } =
+      await storeTaskOutputImages(task, dataUrls)
+    const actualParamsList = await resolveImageSizeParamsList(outputDataUrls, undefined, outputImageSizes)
+    const revisedPromptByImage: Record<string, string> = {}
+    outputIds.forEach((id, index) => {
+      const revised = revisedPrompts[index]
+      if (revised) revisedPromptByImage[id] = revised
+    })
+
+    updateTaskInStore(taskId, {
+      outputImages: outputIds,
+      transparentOriginalImages: transparentOriginalImageIds,
+      actualParams: firstActualParams(actualParamsList),
+      actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),
+      revisedPromptByImage: Object.keys(revisedPromptByImage).length ? revisedPromptByImage : undefined,
+      status: 'done',
+      error: null,
+      finishedAt: Date.now(),
+      elapsed: Date.now() - task.createdAt,
+    })
+    showTaskCompletionNotification('图像生成完成', `共 ${outputIds.length} 张图片。`)
+  } catch (err) {
+    failTask(taskId, task.createdAt, err instanceof Error ? err.message : '保存生成结果失败')
+  }
+}
+
+/** 剔除运行时临时字段，返回适合持久化到 IndexedDB 的任务快照 */
+function getPersistableTask(task: TaskRecord): TaskRecord {
+  return task
+}
+
+/** 再次创作：把已有任务的 prompt、params、输入图片恢复到输入区 */
+export async function reuseConfig(task: TaskRecord) {
+  const { setPrompt, setParams, setInputImages, showToast } = useStore.getState()
+
+  setPrompt(task.prompt)
+  setParams(task.params)
+
+  if (task.inputImageIds.length) {
+    const loaded: InputImage[] = []
+    for (const id of task.inputImageIds) {
+      const dataUrl = await ensureImageCached(id)
+      if (dataUrl) loaded.push({ id, dataUrl })
+    }
+    setInputImages(loaded)
+    if (loaded.length < task.inputImageIds.length) {
+      showToast('部分输入图片已丢失，已跳过', 'info')
+    }
+  }
 }
 
 function normalizeFavoritePatch(task: TaskRecord, patch: Partial<TaskRecord>, defaultFavoriteCollectionId: string | null): Partial<TaskRecord> {
@@ -1766,7 +1701,7 @@ export async function deleteFavoriteCollection(collectionId: string, deleteTasks
 /** 重试失败的任务：创建新任务并执行 */
 export async function retryTask(task: TaskRecord) {
   const { settings } = useStore.getState()
-  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const normalizedParams = normalizeParamsForSettings(task.params, settings)
   const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
@@ -1779,6 +1714,7 @@ export async function retryTask(task: TaskRecord) {
     id: taskId,
     prompt: task.prompt,
     params: taskParams,
+    apiModel: task.apiModel,
     inputImageIds: [...task.inputImageIds],
     maskTargetImageId: task.maskTargetImageId ?? null,
     maskImageId: task.maskImageId ?? null,
@@ -1951,7 +1887,6 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   }
 
   if (options.clearConfig) {
-    useStore.setState({ dismissedCodexCliPrompts: [] })
     setSettings({ ...DEFAULT_SETTINGS })
     setParams({ ...DEFAULT_PARAMS })
   }
@@ -1959,55 +1894,17 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   showToast('所选数据已清空', 'success')
 }
 
-async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<ReturnType<typeof getCustomQueuedImageResult>>) {
-  const latest = useStore.getState().tasks.find((item) => item.id === task.id)
-  if (!latest || latest.status === 'done') return
-  if (latest.status !== 'running' && !latest.customRecoverable) return
-
-  const { outputIds, outputDataUrls, outputImageSizes, transparentOriginalImageIds } = await storeTaskOutputImages(task, result.images)
-  const actualParamsList = await resolveImageSizeParamsList(outputDataUrls, undefined, outputImageSizes)
-  const latestBeforeUpdate = useStore.getState().tasks.find((item) => item.id === task.id)
-  if (!latestBeforeUpdate || latestBeforeUpdate.status === 'done' || (latestBeforeUpdate.status !== 'running' && !latestBeforeUpdate.customRecoverable)) {
-    await deleteUnreferencedImageIds([...outputIds, ...(transparentOriginalImageIds ?? [])])
-    return
-  }
-
-  updateTaskInStore(task.id, {
-    outputImages: outputIds,
-    transparentOriginalImages: transparentOriginalImageIds,
-    actualParams: firstActualParams(actualParamsList),
-    actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),
-    revisedPromptByImage: undefined,
-    status: 'done',
-    error: null,
-    customRecoverable: false,
-    finishedAt: Date.now(),
-    elapsed: Date.now() - task.createdAt,
-  })
-  useStore.getState().showToast(`自定义异步任务已恢复，共 ${outputIds.length} 张图片`, 'success')
-  showTaskCompletionNotification('图像生成完成', `自定义异步任务已恢复，共 ${outputIds.length} 张图片。`)
-}
-
-async function recoverCustomTask(taskId: string) {
-  const { tasks } = useStore.getState()
-  const task = tasks.find((item) => item.id === taskId)
-  if (!task || !task.customTaskId || task.status === 'done') return
-
-  scheduleCustomRecovery(taskId)
-}
-
 /** 导出选项 */
 export interface ExportOptions {
-  exportConfig?: boolean
   exportTasks?: boolean
 }
 
 /** 导出数据为 ZIP */
-export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
+export async function exportData(options: ExportOptions = { exportTasks: true }) {
   try {
     const tasks = options.exportTasks ? await getAllTasks() : []
     const images = options.exportTasks ? await getAllImages() : []
-    const { settings, favoriteCollections, defaultFavoriteCollectionId } = useStore.getState()
+    const { favoriteCollections, defaultFavoriteCollectionId } = useStore.getState()
     const exportedAt = Date.now()
     const thumbnailsByImageId = new Map<string, NonNullable<Awaited<ReturnType<typeof getImageThumbnail>>>>()
 
@@ -2029,7 +1926,6 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const { bytes: zipped } = buildExportZip({
       options,
       exportedAt,
-      settings,
       tasks,
       images,
       thumbnailsByImageId,
@@ -2056,12 +1952,11 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
 
 /** 导入选项 */
 export interface ImportOptions {
-  importConfig?: boolean
   importTasks?: boolean
 }
 
 /** 导入 ZIP 数据 */
-export async function importData(file: File, options: ImportOptions = { importConfig: true, importTasks: true }): Promise<boolean> {
+export async function importData(file: File, options: ImportOptions = { importTasks: true }): Promise<boolean> {
   try {
     const buffer = await file.arrayBuffer()
     const { manifest: data, files } = readExportZip(new Uint8Array(buffer))
@@ -2125,16 +2020,9 @@ export async function importData(file: File, options: ImportOptions = { importCo
       scheduleThumbnailBackfill(importedImageIds)
     }
 
-    if (options.importConfig && data.settings) {
-      const state = useStore.getState()
-      state.setSettings(mergeImportedSettings(state.settings, data.settings))
-    }
-
     let msg = '数据已成功导入'
     if (options.importTasks && data.tasks) {
       msg = `已导入 ${data.tasks.length} 个任务`
-    } else if (options.importConfig && data.settings) {
-      msg = '配置已成功导入'
     }
 
     useStore.getState().showToast(msg, 'success')

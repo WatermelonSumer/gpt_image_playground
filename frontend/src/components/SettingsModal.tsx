@@ -83,7 +83,7 @@ export default function SettingsModal() {
   }
 
   const showNotificationPermissionMessage = (result: BrowserNotificationPermissionResult) => {
-    if (result.permission === 'denied') {
+    if (!result.ok && result.reason === 'denied') {
       showToast('通知权限已被拒绝，请在浏览器设置中手动允许', 'error')
     } else {
       showToast('没有开启系统通知', 'info')
@@ -107,7 +107,7 @@ export default function SettingsModal() {
   const handleExport = async () => {
     setIsExportingData(true)
     try {
-      await exportData({ exportConfig: false, exportTasks })
+      await exportData({ exportTasks })
     } finally {
       setIsExportingData(false)
     }
@@ -118,7 +118,7 @@ export default function SettingsModal() {
     if (file) {
       setIsImportingData(true)
       try {
-        await importData(file, { importConfig: false, importTasks })
+        await importData(file, { importTasks })
         setDraft(useStore.getState().settings)
       } finally {
         setIsImportingData(false)

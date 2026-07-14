@@ -238,11 +238,11 @@ export default function TaskCard({
 
   // 定时更新运行中任务的计时
   useEffect(() => {
-    if (task.status !== 'running' && !(task.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
+    if (task.status !== 'running') return
     const id = setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => clearInterval(id)
-  }, [task.customRecoverable, task.falRecoverable, task.status])
+  }, [task.status])
 
   // 加载缩略图
   useEffect(() => {
@@ -281,7 +281,7 @@ export default function TaskCard({
 
   const duration = (() => {
     let seconds: number
-    if (task.status === 'running' || task.falRecoverable || task.customRecoverable) {
+    if (task.status === 'running') {
       seconds = Math.floor((now - task.createdAt) / 1000)
     } else if (task.elapsed != null) {
       seconds = Math.floor(task.elapsed / 1000)
@@ -293,9 +293,9 @@ export default function TaskCard({
     return `${mm}:${ss}`
   })()
   const showSwipeAction = swipeActionActive
-  const isFalReconnecting = task.status === 'error' && task.falRecoverable
-  const isCustomReconnecting = task.status === 'error' && task.customRecoverable
-  const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
+  const isFalReconnecting = false
+  const isCustomReconnecting = false
+  const showRunningTimer = task.status === 'running'
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -557,14 +557,14 @@ export default function TaskCard({
               onTouchCancel={(e) => e.stopPropagation()}
             >
               {/* API Name */}
-              {(task.apiProfileName || task.apiProvider) && (
-                <span 
+              {task.apiModel && (
+                <span
                   className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
-                  title={task.apiProfileName || task.apiProvider}
+                  title={task.apiModel}
                 >
                   <CodeIcon className="w-3 h-3 flex-shrink-0 text-gray-400" />
                   <span className="truncate max-w-[8rem]">
-                    {task.apiProfileName || task.apiProvider}
+                    {task.apiModel}
                   </span>
                 </span>
               )}

@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from logging.config import fileConfig
 
 from alembic import context
@@ -47,7 +48,9 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-  asyncio.run(run_async_migrations())
+  # Windows 默认的 ProactorEventLoop 无法运行 psycopg 异步模式，需切换到 SelectorEventLoop。
+  loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
+  asyncio.run(run_async_migrations(), loop_factory=loop_factory)
 
 
 if context.is_offline_mode():

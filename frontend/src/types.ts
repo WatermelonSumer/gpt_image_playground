@@ -28,6 +28,45 @@ export interface AppSettings {
   zipDownloadRoutes: ZipDownloadRoute[]
 }
 
+const REFERENCE_IMAGE_EDIT_ACTIONS: ReferenceImageEditAction[] = ['ask', 'replace-reference', 'add-mask']
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  model: '',
+  clearInputAfterSubmit: false,
+  persistInputOnRestart: true,
+  alwaysShowRetryButton: false,
+  allowPromptRewrite: true,
+  taskCompletionNotification: false,
+  enterSubmit: true,
+  referenceImageEditAction: 'ask',
+  zipDownloadRoutes: [...DEFAULT_ZIP_DOWNLOAD_ROUTES],
+}
+
+function normalizeZipDownloadRoutes(value: unknown): ZipDownloadRoute[] {
+  if (!Array.isArray(value)) return [...DEFAULT_SETTINGS.zipDownloadRoutes]
+  const allowed = new Set<string>(ZIP_DOWNLOAD_ROUTE_VALUES)
+  const routes = value.filter((item): item is ZipDownloadRoute => typeof item === 'string' && allowed.has(item))
+  return Array.from(new Set(routes))
+}
+
+/** 将任意（可能来自旧版持久化）的设置对象规整为合法的 AppSettings */
+export function normalizeSettings(raw: Partial<AppSettings> | null | undefined): AppSettings {
+  const source = raw ?? {}
+  return {
+    model: typeof source.model === 'string' ? source.model : DEFAULT_SETTINGS.model,
+    clearInputAfterSubmit: typeof source.clearInputAfterSubmit === 'boolean' ? source.clearInputAfterSubmit : DEFAULT_SETTINGS.clearInputAfterSubmit,
+    persistInputOnRestart: typeof source.persistInputOnRestart === 'boolean' ? source.persistInputOnRestart : DEFAULT_SETTINGS.persistInputOnRestart,
+    alwaysShowRetryButton: typeof source.alwaysShowRetryButton === 'boolean' ? source.alwaysShowRetryButton : DEFAULT_SETTINGS.alwaysShowRetryButton,
+    allowPromptRewrite: typeof source.allowPromptRewrite === 'boolean' ? source.allowPromptRewrite : DEFAULT_SETTINGS.allowPromptRewrite,
+    taskCompletionNotification: typeof source.taskCompletionNotification === 'boolean' ? source.taskCompletionNotification : DEFAULT_SETTINGS.taskCompletionNotification,
+    enterSubmit: typeof source.enterSubmit === 'boolean' ? source.enterSubmit : DEFAULT_SETTINGS.enterSubmit,
+    referenceImageEditAction: REFERENCE_IMAGE_EDIT_ACTIONS.includes(source.referenceImageEditAction as ReferenceImageEditAction)
+      ? (source.referenceImageEditAction as ReferenceImageEditAction)
+      : DEFAULT_SETTINGS.referenceImageEditAction,
+    zipDownloadRoutes: normalizeZipDownloadRoutes(source.zipDownloadRoutes),
+  }
+}
+
 // ===== 任务参数 =====
 
 export interface TaskParams {
@@ -75,6 +114,14 @@ export interface TaskRecord {
   params: TaskParams
   /** 生成时使用的平台模型 ID */
   apiModel?: string
+  /** 平台模型展示名（快照） */
+  platformModelName?: string
+  /** 后端生成请求 ID，用于轮询状态 */
+  generationRequestId?: string
+  /** 建单时单价（单张，整数分） */
+  unitPrice?: number
+  /** 实际扣费额度（整数分） */
+  chargedCredits?: number
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */

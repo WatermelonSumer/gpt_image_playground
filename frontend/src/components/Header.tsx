@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, LogOut, UserRound } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { ChevronDown, LogOut, ShieldCheck, UserRound } from 'lucide-react'
 import { useAuthStore } from '../authStore'
 import { useStore } from '../store'
 import { useTooltip } from '../hooks/useTooltip'
@@ -203,6 +204,16 @@ export default function Header() {
                         {user.role === 'super_admin' ? '超级管理员' : '普通用户'}
                       </div>
                     </div>
+                    {user.role === 'super_admin' && (
+                      <Link
+                        to="/admin"
+                        onClick={() => setShowAccount(false)}
+                        className="mt-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 dark:text-gray-300 dark:hover:bg-gray-900"
+                      >
+                        <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                        管理控制台
+                      </Link>
+                    )}
                     <button
                       onClick={() => {
                         setShowAccount(false)

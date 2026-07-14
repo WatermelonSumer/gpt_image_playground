@@ -75,7 +75,7 @@ vi.mock('./lib/transparentImage', () => ({
 }))
 import { clearImages, clearTasks, getAllTasks, getImage, putImage, putTask as putDbTask } from './lib/db'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, removeTask, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, importData, initStore, markInterruptedRunningTasks, migratePersistedState, removeTask, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -192,7 +192,7 @@ describe('data import', () => {
       favoriteCollections: importedCollections,
       defaultFavoriteCollectionId: importedCollections[1].id,
       imageFiles: {},
-    }), { importConfig: false, importTasks: true })
+    }), { importTasks: true })
 
     const state = useStore.getState()
     expect(imported).toBe(true)
